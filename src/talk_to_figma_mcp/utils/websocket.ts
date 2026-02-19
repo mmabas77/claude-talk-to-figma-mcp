@@ -101,13 +101,16 @@ export function connectToFigma(port: number = defaultPort) {
         // Handle regular responses
         const myResponse = json.message;
         logger.debug(`Received message: ${JSON.stringify(myResponse)}`);
-        logger.log('myResponse' + JSON.stringify(myResponse));
 
-        // Handle response to a request
+        // Skip command echoes (own messages broadcast back to sender)
+        if (myResponse.command) {
+          return;
+        }
+
+        // Handle response to a request (success or error)
         if (
           myResponse.id &&
-          pendingRequests.has(myResponse.id) &&
-          myResponse.result
+          pendingRequests.has(myResponse.id)
         ) {
           const request = pendingRequests.get(myResponse.id)!;
           clearTimeout(request.timeout);
@@ -116,9 +119,7 @@ export function connectToFigma(port: number = defaultPort) {
             logger.error(`Error from Figma: ${myResponse.error}`);
             request.reject(new Error(myResponse.error));
           } else {
-            if (myResponse.result) {
-              request.resolve(myResponse.result);
-            }
+            request.resolve(myResponse.result ?? myResponse);
           }
 
           pendingRequests.delete(myResponse.id);
@@ -174,7 +175,18 @@ export async function joinChannel(channelName: string): Promise<void> {
   try {
     await sendCommandToFigma("join", { channel: channelName });
     currentChannel = channelName;
-    logger.info(`Joined channel: ${channelName}`);
+
+    try {
+      await sendCommandToFigma("ping", {}, 12000);
+      logger.info(`Joined channel: ${channelName}`);
+    } catch (verificationError) {
+      currentChannel = null;
+      const errorMsg = verificationError instanceof Error
+        ? verificationError.message
+        : String(verificationError);
+      logger.error(`Failed to verify channel ${channelName}: ${errorMsg}`);
+      throw new Error(`Failed to verify connection to channel "${channelName}". The Figma plugin may not be connected to this channel.`);
+    }
   } catch (error) {
     logger.error(`Failed to join channel: ${error instanceof Error ? error.message : String(error)}`);
     throw error;
